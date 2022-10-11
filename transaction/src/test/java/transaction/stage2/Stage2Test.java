@@ -1,5 +1,8 @@
 package transaction.stage2;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -7,16 +10,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-
 /**
  * 트랜잭션 전파(Transaction Propagation)란?
  * 트랜잭션의 경계에서 이미 진행 중인 트랜잭션이 있을 때 또는 없을 때 어떻게 동작할 것인가를 결정하는 방식을 말한다.
- *
+ * <p>
  * FirstUserService 클래스의 메서드를 실행할 때 첫 번째 트랜잭션이 생성된다.
  * SecondUserService 클래스의 메서드를 실행할 때 두 번째 트랜잭션이 어떻게 되는지 관찰해보자.
- *
+ * <p>
  * https://docs.spring.io/spring-framework/docs/current/reference/html/data-access.html#tx-propagation
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -45,8 +45,8 @@ class Stage2Test {
 
         log.info("transactions : {}", actual);
         assertThat(actual)
-                .hasSize(0)
-                .containsExactly("");
+                .hasSize(1)
+                .containsExactly("transaction.stage2.FirstUserService.saveFirstTransactionWithRequired");
     }
 
     /**
@@ -59,8 +59,9 @@ class Stage2Test {
 
         log.info("transactions : {}", actual);
         assertThat(actual)
-                .hasSize(0)
-                .containsExactly("");
+                .hasSize(2)
+                .containsExactly("transaction.stage2.SecondUserService.saveSecondTransactionWithRequiresNew",
+                        "transaction.stage2.FirstUserService.saveFirstTransactionWithRequiredNew");
     }
 
     /**
@@ -69,12 +70,18 @@ class Stage2Test {
      */
     @Test
     void testRequiredNewWithRollback() {
-        assertThat(firstUserService.findAll()).hasSize(-1);
+        assertThat(firstUserService.findAll()).hasSize(0);
 
         assertThatThrownBy(() -> firstUserService.saveAndExceptionWithRequiredNew())
                 .isInstanceOf(RuntimeException.class);
 
-        assertThat(firstUserService.findAll()).hasSize(-1);
+        assertThat(firstUserService.findAll()).hasSize(1);
+        /**
+         * 답변)
+         * secondUserService.saveSecondTransactionWithRequiresNew() 메서드에서 새로운 트랜잭션이 생겼다.
+         * firstUserService의 Transaction에서는 예외가 발생해 Rollback 됐지만,
+         * secondeUserService에서는 Rollback이 적용되지 않아 user 한명이 추가되었다.
+         */
     }
 
     /**
@@ -87,8 +94,13 @@ class Stage2Test {
 
         log.info("transactions : {}", actual);
         assertThat(actual)
-                .hasSize(0)
-                .containsExactly("");
+                .hasSize(1)
+                .containsExactly("transaction.stage2.FirstUserService.saveFirstTransactionWithSupports");
+        /**
+         * 답변)
+         * 트랜잭션1이 존재하지 않는 경우 트랜잭션2는 생성되지 않는다. 하지만 로직은 정상적으로 수행된다.
+         */
+
     }
 
     /**
@@ -102,15 +114,20 @@ class Stage2Test {
 
         log.info("transactions : {}", actual);
         assertThat(actual)
-                .hasSize(0)
-                .containsExactly("");
+                .hasSize(1)
+                .containsExactly("transaction.stage2.FirstUserService.saveFirstTransactionWithMandatory");
+        /**
+         * 답변)
+         * 트랜잭션1이 존재하지 않으면 예외를 던진다.
+         * Supports는 로직은 수행되지만, Mandatory는 예외를 던지고 로직이 수행되지 않음.
+         */
     }
 
     /**
      * 아래 테스트는 몇 개의 물리적 트랜잭션이 동작할까?
      * FirstUserService.saveFirstTransactionWithNotSupported() 메서드의 @Transactional을 주석 처리하자.
      * 다시 테스트를 실행하면 몇 개의 물리적 트랜잭션이 동작할까?
-     *
+     * <p>
      * 스프링 공식 문서에서 물리적 트랜잭션과 논리적 트랜잭션의 차이점이 무엇인지 찾아보자.
      */
     @Test
@@ -119,8 +136,18 @@ class Stage2Test {
 
         log.info("transactions : {}", actual);
         assertThat(actual)
-                .hasSize(0)
-                .containsExactly("");
+//                .hasSize(2)
+//                .containsExactly("transaction.stage2.SecondUserService.saveSecondTransactionWithNotSupported",
+//                        "transaction.stage2.FirstUserService.saveFirstTransactionWithNotSupported");
+                .hasSize(1)
+                .containsExactly("transaction.stage2.SecondUserService.saveSecondTransactionWithNotSupported");
+
+        /**
+         * 답변)
+         * Required인 경우 자식 트랜잭션에서 물리적 트랜잭션을 생성하지 않는다.(RequiredNew일 경우 물리적 트랜잭션 생성)
+         * 본인이 Required인 경우 물리적 트랜잭션을 생성한다.
+         * 만약 @Transactional을 주석처리하고나면 물리적 트랜잭션은 생기지 않고, 트랜잭션2에서 논리적 트랜잭션을 생성한다.
+         */
     }
 
     /**
@@ -135,6 +162,12 @@ class Stage2Test {
         assertThat(actual)
                 .hasSize(0)
                 .containsExactly("");
+        /**
+         * 답변)
+         * Nested는 이미 진행중인 트랜잭션이 있으면 세이브 포인트를 만든다, 없으면 그냥 Required 처럼 작동한다.
+         * JpaTransactionManager은 JdbcConncetion에서만 Nested를 제공하므로 에러가 난다.
+         *
+         */
     }
 
     /**
@@ -148,5 +181,12 @@ class Stage2Test {
         assertThat(actual)
                 .hasSize(0)
                 .containsExactly("");
+
+        /**
+         * 답변)
+         * Never은 트랜잭션이 존재하면 예외를 던진다.
+         * 트랜잭션1의 Transactional을 주석처리 하면 정상작동한다.
+         * 하지만 트랜잭션2는 논리적 트랜잭션을 만든다.
+         */
     }
 }
